@@ -1,0 +1,167 @@
+---
+title: "R4qPCR_examples"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Brief description
+
+Next example will provide analysis pipeline of gene expression data obtained by real time qPCR experiment. Experiment is the sample file from *Bio-Rad CFX Manager 3.1* called *CFX96 SYBR 20uL Gene Expression+Melt.pcrd* (search original file here *C:\\Program Files (x86)\\Bio-Rad\\CFX\\SampleFiles\\DataFiles\\CFX96 SYBR 20uL Gene Expression+Melt.pcrd* or use our copy *Files/CFX96 SYBR 20uL Gene Expression+Melt.pcrd*).
+
+This file contains gene expression experiment with *SybrGreen* intercalating dye of three genes: *Actin* (reference gene), *Tubulin* and *IL1ß*. Each gene has standard dilution and three gene expression time points (*0Hr*, *1Hr* and *2Hr*). Also file contains melting curve result of each sample.
+
+Our analysis will have several steps:
+
+- *export* to *RDML* format file via *Bio-Rad CFX Manager 3.1* software
+- *RDML* file *import* into **R** by **RDML** package and experiment overview
+- *melting curves analysis* to test reactions specificity by **MBmca** package
+- *quantification cycle (Cq) calculation* by **qPCR** package
+- genes *amplification efficiency* determination by **chipPCR** package
+- *gene expression analysis* by **EasyqpcR** package
+
+
+## Export to RDML Format
+
+Default format of *Bio-Rad CFX Manager 3.1* files is *pcrd* that is password protected zip file which can't be imported directly into **R**. So we need to convert it to *RDML* inside *Bio-Rad CFX Manager 3.1*.
+
+To do this open file *CFX96 SYBR 20uL Gene Expression+Melt.pcrd* and click main menu `Export > Export RDML File > RDML v1.1…`. Note that *NTC* wells should be included into analysis (done in our file copy) and *all targets in all wells have to be named !* (targets naming is necessary step for correct *RDML* export by *Bio-Rad CFX Manager 3.1*). After that you should get *RDML* file called *CFX96 SYBR 20uL Gene Expression+Melt.rdml* (included in our example files *Files/CFX96 SYBR 20uL Gene Expression+Melt.rdml*).
+
+## RDML File Import into **R**
+
+This step can be done by `RDML$new()` function from **RDML** package.
+
+```{r}
+library(RDML)
+rdml <- RDML$new("Files/CFX96 SYBR 20uL Gene Expression+Melt.rdml")
+```
+
+Generated *rdml* is **R6** object which contains *RDML v1.2* format file data with tree structure (http://www.rdml.org/files.php?v=1.2) and some functions to work with this data.
+
+To test that file import was correct we can use `AsDendrogram()` function — plots dendrogram with file overview.
+
+```{r message=FALSE}
+rdml$AsDendrogram()
+```
+
+From this dendrogram we can see that our file contains one *Experiment*, one *Run*, three *targets* each of them contains three *Sample types* (*unkn* — unknown, *std* — standard, *ntc* — no template control) and two *Data types* (*adp* — amplification data points, *mdp* — melting data points).
+
+Additionally we can plot all amplification curves and visually compare them with plot by *Bio-Rad CFX Manager 3.1*. Use `GetFData(long.table = TRUE)` function to get points in **ggplot2** compatible format. 
+```{r message=FALSE}
+library(ggplot2)
+ggplot(rdml$GetFData(long.table = TRUE)) +
+  geom_path(aes(x = cyc, y = fluor, group = fdata.name,
+                color = target,     # color curves by targets
+  ))
+```
+So we can see that imported data contains all necessary information.
+
+## Reactions specifity test
+
+Fluorescence signal of experiment is obtained by SybrGreen intercalating dye. Main disadvantage of this method is that part of signal (or all!) can be result of primers dimers. Regular technique to test this — make PCR products melting. Supposed that *real* product has only one *high* temperature melting peak otherwise primers dimers give *lower* temperature peak.
+
+By ploting all melting curves we can see that all *unkn* and *std* samples have one *high* melting temperature. Thus we can you our data for the subsequent analysis.
+```{r message=FALSE}
+library(MBmca)
+rdml$GetFData(dp.type = "mdp", # get melting data
+              long.table = TRUE) %>% 
+  group_by(fdata.name) %>% 
+  mutate(dfluor = tryCatch(c(NA,
+                             # convert data to diff curves
+                             diffQ(data.frame(tmp, fluor), verbose = TRUE, fct = max)$xy[, 2],
+                             NA),
+                           error = function(e) NA)) %>% 
+  ggplot() +
+  geom_path(aes(x = tmp, # temperature instead of cycles
+                y = dfluor, group = fdata.name,
+                color = sample.type     # color curves by targets
+  ))
+```
+
+## Quantification cycle (Cq) and efficiency calculation
+
+Next we will calculate Cq for all standard samples and efficiency of amplification by target.
+Standard samples quantities can be extracted from *RDML* file (in this case they are represented as *copies*).
+
+Cq calculation contains two steps (**qpcR** package):
+
+- generation *l5* models of PCR curves
+- getting maximum of the second derivative model curve
+
+Target efficiency is calculated by standard dilutions curve approach - **chipPCR** package.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+library(qpcR)
+rdmlTbl <- rdml$AsTable(
+  # add column with DNA copies number of standard samples
+  cop = rdml$sample[[react$sample$id]]$quantity$value) %>% 
+  # use only standard samples
+  filter(sample.type == "std")
+
+# create 'l5' models for standard samples 
+stdml <-
+  rdml$GetFData(rdmlTbl) %>% 
+  modlist(model = l5)
+
+# get Cq values (maximum of the second derivative curve)
+rdmlTbl$Cq <- sapply(stdml, function(stdm) efficiency(stdm, plot = FALSE)$cpD2)
+
+# calculate amplification efficiency for each target
+effTbl <- rdmlTbl %>% 
+  group_by(target) %>%
+  summarise(eff = effcalc(cop, Cq)@amplification.efficiency)
+```
+
+```{r echo=FALSE, results='asis'}
+knitr::kable(effTbl, align = "l", caption = "Calculated effiencies (%)")
+
+```
+
+## Gene expression analysis
+
+To calculate gene expression we will use *∆∆Ct* method. *Actin* and *Tubulin* will be our reference genes. *0Hr* — control sample.
+
+Such analysis can be done by **nrmData** function from **EasyqpcR** package.
+
+```{r, warning=FALSE, results='hide'}
+library(EasyqpcR)
+rdmlTblunkn <- rdml$AsTable() %>% 
+  # use only unknown samples
+  filter(sample.type == "unkn")
+
+# create 'l5' models for unknown samples 
+unknml <-
+  rdml$GetFData(rdmlTblunkn) %>% 
+  modlist(model = l5)
+```
+```{r}
+# get Cq values (maximum of the second derivative curve)
+rdmlTblunkn$Cq <- sapply(unknml, function(unknm) efficiency(unknm, plot = FALSE)$cpD2)
+rdmlTblunkn$sample <- rdmlTblunkn$sample %>%
+  paste(rep(1:3, each = 9), sep = "_")
+
+# generate input table for 'nrmData' function
+effInput <- rdmlTblunkn %>% 
+  dplyr::select(target, sample, Cq) %>% 
+  spread(target, Cq) %>% 
+  mutate(sample = gsub("_.", "", sample))
+
+# test that input does not contain 'bad' Cqs (no in our case!)
+badCt(data = effInput, r = 3, threshold = 0.5, na.rm = TRUE)
+
+geResult <- nrmData(data = effInput , r = 3, 
+                    E = effTbl$eff / 100 * 2, # using previously calculated efficiencies
+                    Eerror = c(0, 0, 0), 
+                    nSpl = 3, nbRef = 2, Refposcol = c(1,3),
+                    nCTL = 1, CF = c(1, 1, 1), CalPos = 1, 
+                    trace = FALSE, geo = TRUE, na.rm = TRUE)[[1]]
+
+barplot(geResult$IL1Beta, names.arg = rownames(geResult))
+```
+
+So we can see that expression *IL1Beta* of decreases with time.
