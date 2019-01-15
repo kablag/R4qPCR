@@ -164,4 +164,4 @@ geResult <- nrmData(data = effInput , r = 3,
 barplot(geResult$IL1Beta, names.arg = rownames(geResult))
 ```
 
-So we can see that expression *IL1Beta* of decreases with time.
+So we can see that expression of *IL1Beta* decreases with time.
