@@ -18,17 +18,17 @@ This file contains gene expression experiment with *SybrGreen* intercalating dye
 
 Our analysis will have several steps:
 
-- *export* to *RDML* format file via *Bio-Rad CFX Manager 3.1* software
-- *RDML* file *import* into **R** by **RDML** package and experiment overview
-- *melting curves analysis* to test reactions specificity by **MBmca** package
-- *quantification cycle (Cq) calculation* by **qPCR** package
-- genes *amplification efficiency* determination by **chipPCR** package
-- *gene expression analysis* by **EasyqpcR** package
+1. *export* to *RDML* format file via *Bio-Rad CFX Manager 3.1* software
+2. *RDML* file *import* into **R** by **RDML** package and experiment overview
+3. *melting curves analysis* to test reactions specificity by **MBmca** package
+4. *quantification cycle (Cq) calculation* by **qPCR** package
+5. *amplification efficiency* determination of all genes by **chipPCR** package
+6. *gene expression analysis* by **EasyqpcR** package
 
 
 ## Export to RDML Format
 
-Default format of *Bio-Rad CFX Manager 3.1* files is *pcrd* that is password protected zip file which can't be imported directly into **R**. So we need to convert it to *RDML* inside *Bio-Rad CFX Manager 3.1*.
+The default format of the *Bio-Rad CFX Manager 3.1* files is *pcrd*, which is a password protected zip file. Such file cannot easily be imported directly into **R**. So we to converted it to *RDML* inside *Bio-Rad CFX Manager 3.1*. The RDML-format is a standard file format for the exchange of qPCR data.
 
 To do this open file *CFX96 SYBR 20uL Gene Expression+Melt.pcrd* and click main menu `Export > Export RDML File > RDML v1.1…`. Note that *NTC* wells should be included into analysis (done in our file copy) and *all targets in all wells have to be named !* (targets naming is necessary step for correct *RDML* export by *Bio-Rad CFX Manager 3.1*). After that you should get *RDML* file called *CFX96 SYBR 20uL Gene Expression+Melt.rdml* (included in our example files *Files/CFX96 SYBR 20uL Gene Expression+Melt.rdml*).
 
@@ -61,7 +61,7 @@ ggplot(rdml$GetFData(long.table = TRUE)) +
 ```
 So we can see that imported data contains all necessary information.
 
-## Reactions specifity test
+## Reactions specificity test
 
 Fluorescence signal of experiment is obtained by SybrGreen intercalating dye. Main disadvantage of this method is that part of signal (or all!) can be result of primers dimers. Regular technique to test this — make PCR products melting. Supposed that *real* product has only one *high* temperature melting peak otherwise primers dimers give *lower* temperature peak.
 
@@ -73,8 +73,8 @@ rdml$GetFData(dp.type = "mdp", # get melting data
   group_by(fdata.name) %>% 
   mutate(dfluor = tryCatch(c(NA,
                              # convert data to diff curves
-                             diffQ(data.frame(tmp, fluor), verbose = TRUE, fct = max)$xy[, 2],
-                             NA),
+                             diffQ(data.frame(tmp, fluor), verbose = TRUE, 
+                             fct = max)$xy[, 2], NA),
                            error = function(e) NA)) %>% 
   ggplot() +
   geom_path(aes(x = tmp, # temperature instead of cycles
@@ -124,7 +124,7 @@ knitr::kable(effTbl, align = "l", caption = "Calculated effiencies (%)")
 
 ## Gene expression analysis
 
-To calculate gene expression we will use *∆∆Ct* method. *Actin* and *Tubulin* will be our reference genes. *0Hr* — control sample.
+To calculate gene expression we will use *ddCt* method. *Actin* and *Tubulin* will be our reference genes. *0Hr* — control sample.
 
 Such analysis can be done by **nrmData** function from **EasyqpcR** package.
 
