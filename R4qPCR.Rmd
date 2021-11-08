@@ -97,6 +97,7 @@ Target efficiency is calculated by standard dilutions curve approach - **chipPCR
 
 ```{r message=FALSE, warning=FALSE, results='hide'}
 library(qpcR)
+library(chipPCR)
 rdmlTbl <- rdml$AsTable(
   # add column with DNA copies number of standard samples
   cop = rdml$sample[[react$sample$id]]$quantity$value) %>% 
@@ -124,15 +125,15 @@ knitr::kable(effTbl, align = "l", caption = "Calculated effiencies (%)")
 
 ## Gene expression analysis
 
-To calculate gene expression we will use *ddCt* method. *Actin* and *Tubulin* will be our reference genes. *0Hr* — control sample.
+To calculate gene expression we will use *ddCt* method. *Tubulin* will be our reference gene since its effectiveness is closer to *IL1Beta*. *0Hr* — control sample.
 
-Such analysis can be done by **nrmData** function from **EasyqpcR** package.
+Such analysis can be done by **pcr_analyze** function from **pcr** package.
 
 ```{r, warning=FALSE, results='hide'}
-library(EasyqpcR)
+library(pcr)
 rdmlTblunkn <- rdml$AsTable() %>% 
   # use only unknown samples
-  filter(sample.type == "unkn")
+  filter(sample.type == "unkn", target %in% c("Tubulin", "IL1Beta"))
 
 # create 'l5' models for unknown samples 
 unknml <-
@@ -143,25 +144,23 @@ unknml <-
 # get Cq values (maximum of the second derivative curve)
 rdmlTblunkn$Cq <- sapply(unknml, function(unknm) efficiency(unknm, plot = FALSE)$cpD2)
 rdmlTblunkn$sample <- rdmlTblunkn$sample %>%
-  paste(rep(1:3, each = 9), sep = "_")
+  paste(rep(1:3, each = 6), sep = "_")
 
 # generate input table for 'nrmData' function
 effInput <- rdmlTblunkn %>% 
   dplyr::select(target, sample, Cq) %>% 
   spread(target, Cq) %>% 
-  mutate(sample = gsub("_.", "", sample))
+  mutate(sample = gsub("_.", "", sample)) %>% 
+  as.data.frame()
 
-# test that input does not contain 'bad' Cqs (no in our case!)
-badCt(data = effInput, r = 3, threshold = 0.5, na.rm = TRUE)
+# perform ddCt analysis
+geResult <- pcr_analyze(effInput[, 2:3],
+                   group_var = effInput$sample,
+                   reference_gene = 'Tubulin',
+                   reference_group = '0Hr')
 
-geResult <- nrmData(data = effInput , r = 3, 
-                    E = effTbl$eff / 100 * 2, # using previously calculated efficiencies
-                    Eerror = c(0, 0, 0), 
-                    nSpl = 3, nbRef = 2, Refposcol = c(1,3),
-                    nCTL = 1, CF = c(1, 1, 1), CalPos = 1, 
-                    trace = FALSE, geo = TRUE, na.rm = TRUE)[[1]]
 
-barplot(geResult$IL1Beta, names.arg = rownames(geResult))
+barplot(geResult$relative_expression, names.arg = geResult$group)
 ```
 
 So we can see that expression of *IL1Beta* decreases with time.
